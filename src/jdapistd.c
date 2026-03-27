@@ -30,6 +30,9 @@
 #include "jdmerge.h"
 #include "jdsample.h"
 #include "jmemsys.h"
+#ifdef WITH_PROFILE
+#include "tjutil.h"
+#endif
 
 #if BITS_IN_JSAMPLE == 8
 
@@ -634,7 +637,15 @@ _jpeg_skip_scanlines(j_decompress_ptr cinfo, JDIMENSION num_lines)
          */
         if (!cinfo->entropy->insufficient_data)
           cinfo->master->last_good_iMCU_row = cinfo->input_iMCU_row;
+#ifdef WITH_PROFILE
+        cinfo->master->start = getTime();
+#endif
         (*cinfo->entropy->decode_mcu) (cinfo, NULL);
+#ifdef WITH_PROFILE
+        cinfo->master->entropy_elapsed += getTime() - cinfo->master->start;
+        cinfo->master->entropy_mcoeffs +=
+          (double)cinfo->blocks_in_MCU * DCTSIZE2 / 1000000.;
+#endif
       }
     }
     cinfo->input_iMCU_row++;
