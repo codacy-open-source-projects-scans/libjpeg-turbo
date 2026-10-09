@@ -14,7 +14,7 @@ if(CMAKE_C_FLAGS_RELWITHDEBINFO)
 endif()
 
 project(libjpeg-turbo C)
-set(VERSION 3.1.91)
+set(VERSION 3.2.1)
 set(COPYRIGHT_YEAR "1991-2026")
 string(REPLACE "." ";" VERSION_TRIPLET ${VERSION})
 list(GET VERSION_TRIPLET 0 VERSION_MAJOR)
@@ -107,12 +107,14 @@ include(cmakescripts/PackageInfo.cmake)
 math(EXPR BITS "${CMAKE_SIZEOF_VOID_P} * 8")
 string(TOLOWER ${CMAKE_SYSTEM_PROCESSOR} CMAKE_SYSTEM_PROCESSOR_LC)
 set(COUNT 1)
-foreach(ARCH ${CMAKE_OSX_ARCHITECTURES})
-  if(COUNT GREATER 1)
-    message(FATAL_ERROR "${CMAKE_PROJECT_NAME} contains assembly code, so it cannot be built with multiple values in CMAKE_OSX_ARCHITECTURES.")
-  endif()
-  math(EXPR COUNT "${COUNT}+1")
-endforeach()
+if(WITH_SIMD OR NOT DEFINED WITH_SIMD)
+  foreach(ARCH ${CMAKE_OSX_ARCHITECTURES})
+    if(COUNT GREATER 1)
+      message(FATAL_ERROR "${CMAKE_PROJECT_NAME} contains assembly code, so it cannot be built with multiple values in CMAKE_OSX_ARCHITECTURES.")
+    endif()
+    math(EXPR COUNT "${COUNT}+1")
+  endforeach()
+endif()
 if(CMAKE_SYSTEM_PROCESSOR_LC MATCHES "x86_64" OR
   CMAKE_SYSTEM_PROCESSOR_LC MATCHES "amd64" OR
   CMAKE_SYSTEM_PROCESSOR_LC MATCHES "i[0-9]86" OR
@@ -519,26 +521,21 @@ if(UNIX)
   if(CMAKE_CROSSCOMPILING)
     set(RIGHT_SHIFT_IS_UNSIGNED 0)
   else()
-    include(CheckCSourceRuns)
-    check_c_source_runs("
-      #include <stdio.h>
-      #include <stdlib.h>
-      static int is_shifting_signed (long arg) {
-        long res = arg >> 4;
-        if (res == -0x7F7E80CL)
-          return 1; /* right shift is signed */
-        /* see if unsigned-shift hack will fix it. */
-        /* we can't just test exact value since it depends on width of long... */
-        res |= 0xFFFFFFFFL << (32-4);
-        if (res == -0x7F7E80CL)
-          return 0; /* right shift is unsigned */
-        printf(\"Right shift isn't acting as I expect it to.\\\\n\");
-        printf(\"I fear the JPEG software will not work at all.\\\\n\\\\n\");
-        return 0; /* try it with unsigned anyway */
-      }
-      int main (void) {
-        exit(is_shifting_signed(-0x7F7E80B1L));
-      }" RIGHT_SHIFT_IS_UNSIGNED)
+    try_run(RIGHT_SHIFT_IS_UNSIGNED RIGHT_SHIFT_IS_UNSIGNED_COMPILES
+      ${CMAKE_CURRENT_BINARY_DIR}
+      ${CMAKE_SOURCE_DIR}/cmakescripts/right_shift_is_unsigned.c)
+    if(RIGHT_SHIFT_IS_UNSIGNED EQUAL 1)
+      message(STATUS "Right shift is unsigned")
+    elseif(RIGHT_SHIFT_IS_UNSIGNED EQUAL 0)
+      message(STATUS "Right shift is signed")
+    elseif(RIGHT_SHIFT_IS_UNSIGNED EQUAL 2)
+      message(FATAL_ERROR
+        "Could not determine whether right shift is signed or unsigned.")
+    else()
+      message(WARNING
+        "Could not determine whether right shift is signed or unsigned.  Assuming signed.  (This is normal if cross-compiling.)")
+      set(RIGHT_SHIFT_IS_UNSIGNED 0)
+    endif()
   endif()
 endif()
 
@@ -729,16 +726,35 @@ if(WITH_JNA)
 endif()
 
 if(WITH_TURBOJPEG OR WITH_TOOLS OR WITH_TESTS)
+  # Only the in-tree version of libspng is thoroughly tested by our project
+  # (including fuzz testing) and is subject to our quality control and version
+  # control processes.  Few operating systems and packaging environments
+  # provide libspng, and the version they provide may or may not have the same
+  # bug fixes as our in-tree version.  This option should only be enabled by
+  # those who are willing to assume the quality control, version control, and
+  # support burden of the combined solution.
   option(WITH_SYSTEM_SPNG
-    "Build ${CMAKE_PROJECT_NAME} against the system-supplied libspng implementation rather than the implementation in the ${CMAKE_PROJECT_NAME} source tree"
+    "Build ${CMAKE_PROJECT_NAME} against the system-supplied libspng implementation rather than the implementation in the ${CMAKE_PROJECT_NAME} source tree (Experimental)"
     OFF)
   boolean_number(WITH_SYSTEM_SPNG)
   report_option(WITH_SYSTEM_SPNG "System-supplied libspng")
   if(WITH_SYSTEM_SPNG)
-    include(FindPkgConfig)
-    pkg_check_modules(spng REQUIRED spng IMPORTED_TARGET)
+    find_package(SPNG CONFIG QUIET)
+    if(SPNG_FOUND)
+      if(TARGET spng::spng)
+        set(SPNG_TARGET_DEFAULT spng::spng)
+      elseif(TARGET spng::spng_static)
+        set(SPNG_TARGET_DEFAULT spng::spng_static)
+      endif()
+    else()
+      include(FindPkgConfig)
+      pkg_check_modules(spng REQUIRED spng IMPORTED_TARGET)
+      set(SPNG_TARGET_DEFAULT PkgConfig::spng)
+    endif()
+    set(SPNG_TARGET ${SPNG_TARGET_DEFAULT} CACHE STRING
+      "The imported target to use when linking libspng")
     unset(SPNG_STATIC_SOURCES)
-    set(SPNG_LIBRARY PkgConfig::spng)
+    set(SPNG_LIBRARY ${SPNG_TARGET})
   else()
     option(WITH_SYSTEM_ZLIB
       "Build ${CMAKE_PROJECT_NAME} against the system-supplied zlib implementation rather than the implementation in the ${CMAKE_PROJECT_NAME} source tree"
@@ -950,6 +966,10 @@ if(ENABLE_STATIC)
       endif()
       if(ZLIB_LIBRARY)
         target_link_libraries(bmpsizetest-static ${ZLIB_LIBRARY})
+      else()
+        target_include_directories(bmpsizetest-static PRIVATE
+          ${CMAKE_SOURCE_DIR}/src/spng/zlib)
+        target_compile_definitions(bmpsizetest-static PRIVATE Z_PREFIX)
       endif()
     endif()
   endif()
@@ -1499,7 +1519,7 @@ foreach(libtype ${TEST_LIBTYPES})
       set(MD5_PPM_3x2_IFAST fd283664b3b49127984af0a7f118fccd)
       set(MD5_JPEG_420_ISLOW_ARI e986fb0a637a8d833d96e8a6d6d84ea1)
       set(MD5_JPEG_444_ISLOW_PROGARI 0a8f1c8f66e113c3cf635df0a475a617)
-      set(MD5_PPM_420M_IFAST_ARI 57251da28a35b46eecb7177d82d10e0e)
+      set(MD5_PPM_420M_IFAST_ARI 541b4ac6b8f21c282fb5aa7c7e96f028)
       set(MD5_JPEG_420_ISLOW 9a68f56bc76e466aa7e52f415d0f4a5f)
       set(MD5_PPM_420M_ISLOW_2_1 9f9de8c0612f8d06869b960b05abf9c9)
       set(MD5_PPM_420M_ISLOW_15_8 b6875bc070720b899566cc06459b63b7)
@@ -1881,6 +1901,11 @@ configure_file(test/croptest.in test/croptest @ONLY)
 add_custom_target(croptest
   COMMAND echo croptest
   COMMAND ${BASH} ${CMAKE_CURRENT_BINARY_DIR}/test/croptest)
+
+configure_file(test/droptest.in test/droptest @ONLY)
+add_custom_target(droptest
+  COMMAND echo droptest
+  COMMAND ${BASH} ${CMAKE_CURRENT_BINARY_DIR}/test/droptest)
 
 configure_file(test/indexedcolortest.in test/indexedcolortest @ONLY)
 add_custom_target(indexedcolortest

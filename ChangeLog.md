@@ -1,5 +1,100 @@
-3.2
-===
+3.2.1
+=====
+
+### Significant changes relative to 3.2.0:
+
+1. Fixed a regression introduced by 3.2 beta1[9] that broke Un*x builds in
+which position-independent code (PIC) was not enabled for static libraries.
+This issue could be worked around by explicitly setting the
+`CMAKE_POSITION_INDEPENDENT_CODE` CMake variable or using a toolchain, such as
+the ones provided by Ubuntu, that automatically enables PIC.
+
+2. The RISC-V Vector (RVV) forward DCT modules now use strided segment load
+intrinsics to simultaneously load sample rows from memory and transpose them
+into columns, as well as multiply-accumulate intrinsics where appropriate.
+When using the accurate integer DCT algorithm, RGB-to-baseline JPEG compression
+is approximately 10-17% (avg. 13%) faster (relative to libjpeg-turbo 3.2.0)
+with GCC 14 and 1-8% (avg. 4%) faster with Clang 20.  (Tested on a 1.6 GHz Ky
+X1 CPU.  Actual mileage may vary.)
+
+3. Symbols from the in-tree zlib and libspng implementations introduced by
+3.2 beta1[9] are now hidden, which prevents the symbols from being exposed in
+downstream shared libraries and applications that link with the static
+TurboJPEG API library.  Symbols from the in-tree zlib implementation are now
+also renamed, which prevents downstream shared libraries and applications that
+link with the static TurboJPEG API library from accidentally calling the
+in-tree zlib implementation when they intend to call the system-supplied zlib
+implementation.
+
+4. Fixed an integer overflow and subsequent buffer overrun that occurred when
+attempting to use `tj3LoadImage12()` or `tj3LoadImage16()` from a 32-bit build
+of libjpeg-turbo to load a packed-pixel image with more than 2^31 components.
+
+5. Fixed a division-by-zero error (CVE-2026-75466) that occurred when
+attempting to load a non-grayscale indexed-color PNG image using
+`tj3LoadImage*()` if the pixel format of the packed-pixel buffer was
+unspecified (`TJPF_UNKNOWN`.)
+
+6. Fixed an issue whereby `tj3DecompressToYUV*()` produced incorrect
+chrominance values when decompressing a 4:2:0, 4:1:0, or 2:4 JPEG image with
+the "fast" IDCT algorithm and a scaling factor of 1/2.  (In other words,
+`TJPARAM_FASTDCT` was not ignored as it should be when decompression scaling is
+enabled.)
+
+7. Fixed a buffer overrun and subsequent segfault that occurred on certain
+platforms when attempting to partially decompress a specially-crafted 4:2:0
+JPEG image using the merged (non-fancy) upsampling algorithm with the
+libjpeg-turbo SIMD extensions disabled and a cropping region that would have
+caused any of the component planes to be cropped to a width of 1 or 2 samples.
+
+8. Hardened the libjpeg API against hypothetical applications that may
+erroneously attempt to decompress a full-color 12-bit-per-sample JPEG image
+with both one-pass color quantization and RGB565 color conversion enabled.
+This could have caused a buffer overrun in one of the quantizer's color index
+arrays.  The buffer overrun did not likely pose a security risk, since an
+application that abused the API in the aforementioned manner could never work
+properly.
+
+9. Fixed issues in `jpeg*_skip_scanlines()` whereby, when skipping certain
+groups of scanlines while using a non-fancy (merged or plain) upsampling
+algorithm with a vertical sampling factor greater than 1, the wrong number of
+scanlines were skipped and/or skipped scanlines were returned in subsequent
+calls to `jpeg*_read_scanlines()`.
+
+10. Hardened the TurboJPEG API against hypothetical applications that may
+erroneously pass an invalid image to `tj3DecompressHeader()`, ignore a fatal
+error thrown by that function, and attempt to call the function again with a
+valid image.  Under certain circumstances, this could have caused the values of
+`TJPARAM_JPEGWIDTH` and `TJPARAM_JPEGHEIGHT` to reflect the dimensions reported
+in the invalid image's header rather than the valid image's header, which might
+have caused the caller to allocate too small of a buffer to hold the
+decompressed valid image.
+
+11. `tj3DecompressHeader()` now always removes the ICC profile (if any) that
+was previously extracted into the TurboJPEG instance.  This addresses an
+oversight in 3.2 beta1[10] whereby, if the same TurboJPEG instance was used to
+decompress or transform multiple JPEG images, then `tj3GetICCProfile()` and
+`tj3TransformBufSize()` behaved as if JPEG images with no ICC profile contained
+the last ICC profile extracted.
+
+12. `tj3TransformBufSize()` has been improved in the following ways:
+
+     - The function now accounts for the size of all extra markers (including
+comments, JFIF thumbnails, and Exif data) that will be copied from the source
+image to the destination image, given the current value of
+`TJPARAM_SAVEMARKERS` and the specified transform options.
+     - The function now returns accurate results regardless of the value of
+`TJPARAM_SAVEMARKERS` at the time `tj3DecompressHeader()` was called.  This
+reflects the fact that only the current value of `TJPARAM_SAVEMARKERS` and the
+specified transform options affect the marker copying behavior in
+`tj3Transform()`.
+
+13. Fixed issues in jpegtran that prevented a grayscale image from being
+dropped into a subsampled input image or vice versa.
+
+
+3.2.0
+=====
 
 ### Significant changes relative to 3.2 beta1:
 
